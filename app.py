@@ -1,4 +1,4 @@
-# app.py
+# app.py (Versão Completa e Corrigida)
 
 import streamlit as st
 import pandas as pd
@@ -154,15 +154,12 @@ def gerar_rota_otimizada(_gmaps_client, df_rota, modo):
 @st.cache_data(ttl=3600)
 def analisar_sentimento_do_texto(texto):
     try:
-        # CORREÇÃO: Lendo as credenciais a partir do st.secrets
         creds = Credentials.from_service_account_info(st.secrets["gcp_creds"])
         language_client = language_v1.LanguageServiceClient(credentials=creds)
-        
         document = language_v1.Document(content=texto, type_=language_v1.Document.Type.PLAIN_TEXT, language='pt')
         sentiment = language_client.analyze_sentiment(request={'document': document}).document_sentiment
         return sentiment.score
     except KeyError:
-        # Este erro acontece se 'gcp_creds' não estiver nos secrets
         st.sidebar.error("Credenciais 'gcp_creds' não encontradas nos Secrets. Análise de Sentimento desativada.")
         return 0
     except Exception: return 0
@@ -212,8 +209,11 @@ def prospectar_bairros(api_key, bairros, cidade, tipos, nota_range, precos, raio
         if not bairro_busca.strip(): continue
         barra_progresso.progress((i + 1) / len(bairros), text=f"Processando bairro: {bairro_busca}...")
         try:
-            geocode_result = gmaps.geocode(f"{bairro_busca}, {cidade}");
-            if not geocode_result: st.warning(f"Bairro '{bairro_busca}' não encontrado."); continue
+            # CORREÇÃO: Tornando a busca de geocoding mais específica
+            geocode_result = gmaps.geocode(f"{bairro_busca}, {cidade}")
+            if not geocode_result:
+                st.warning(f"Não foi possível encontrar as coordenadas para '{bairro_busca}'. Pulando.")
+                continue
             loc = geocode_result[0]['geometry']['location']
         except Exception as e:
             st.error(f"Erro de geocodificação para '{bairro_busca}, {cidade}': {e}"); continue
