@@ -172,7 +172,7 @@ def gerar_mensagem_ia(reviews, nome_estabelecimento):
 @st.cache_data(ttl=3600)
 def buscar_detalhes_do_lugar(_gmaps_client, place_id):
     try:
-        # Busca agora pede 'reviews' para a IA, mas não mais 'opening_hours' ou 'editorial_summary'
+        # Busca agora pede 'reviews' para a IA, e foi simplificada
         fields = ['name', 'formatted_phone_number', 'website', 'reviews']
         details = _gmaps_client.place(place_id=place_id, fields=fields, language='pt-BR')
         return details.get('result', {})
@@ -317,9 +317,9 @@ if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
     st.header("Lista Completa de Resultados")
     
     colunas_para_exibir = [
-        'Pontuação', 'Nome', 'Tipo', 'Endereço', 'Nota Média', 'Nº de Avaliações', 
-        'Telefone', 'Ação WhatsApp', 'Email', 'Ação Email', 
-        'Website', 'Instagram', 'Faixa de Preço'
+        'Pontuação', 'Nome', 'Tipo', 'Endereço', 
+        'Nota Média', 'Nº de Avaliações', 'Telefone', 'Ação WhatsApp', 
+        'Email', 'Ação Email', 'Website', 'Instagram', 'Faixa de Preço'
     ]
     st.dataframe(
         df_para_exibir[[col for col in colunas_para_exibir if col in df_para_exibir.columns]], 
@@ -335,6 +335,5 @@ if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
         return df.to_csv(index=False, sep=';').encode('utf-8-sig')
     csv = convert_df_to_csv(df_para_exibir)
     st.download_button(label="📥 Baixar resultados como CSV", data=csv, file_name=f"prospeccao_orfeu.csv", mime="text/csv")
-
 elif 'df_final' in st.session_state:
     st.warning("Nenhum resultado encontrado com os critérios especificados.")
