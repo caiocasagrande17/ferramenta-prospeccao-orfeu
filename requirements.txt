@@ -1,0 +1,11 @@
+streamlit
+pandas
+googlemaps
+requests
+beautifulsoup4
+folium
+streamlit-folium
+qrcode
+Pillow
+google-cloud-language
+google-generativeai
