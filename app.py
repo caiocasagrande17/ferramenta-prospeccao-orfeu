@@ -1,4 +1,4 @@
-# app.py (Versão Completa e Corrigida)
+# app.py
 
 import streamlit as st
 import pandas as pd
@@ -13,8 +13,6 @@ import streamlit.components.v1 as components
 from urllib.parse import quote
 import qrcode
 from io import BytesIO
-from google.cloud import language_v1
-from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
 # --- CSS PERSONALIZADO ---
@@ -39,18 +37,14 @@ page_style = """
     </style>
 """
 
-# --- CONFIGURAÇÃO DAS CHAVES DE API (USANDO SECRETS) ---
-try:
-    MINHA_API_KEY = st.secrets["GOOGLE_API_KEY"]
-except KeyError:
-    st.error("Chave da API do Google Maps (GOOGLE_API_KEY) não encontrada nos Secrets.")
-    st.stop()
+# --- CONFIGURAÇÃO DAS CHAVES DE API (USO LOCAL) ---
+MINHA_API_KEY = "COLE_SUA_CHAVE_DA_API_AQUI" 
+GEMINI_API_KEY = "COLE_SUA_CHAVE_GEMINI_AQUI"
 
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+if GEMINI_API_KEY and GEMINI_API_KEY != "COLE_SUA_CHAVE_GEMINI_AQUI":
     genai.configure(api_key=GEMINI_API_KEY)
-except KeyError:
-    st.sidebar.warning("Chave da API Gemini não encontrada nos Secrets. A IA está desativada.")
+else:
+    st.sidebar.warning("Chave da API Gemini não inserida. A personalização de mensagens por IA está desativada.")
     GEMINI_API_KEY = None
 
 # --- CONSTANTES E LISTAS ---
@@ -152,38 +146,21 @@ def gerar_rota_otimizada(_gmaps_client, df_rota, modo):
         st.error(f"Erro ao calcular a rota: {e}"); return None
 
 @st.cache_data(ttl=3600)
-def analisar_sentimento_do_texto(texto):
-    try:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_creds"])
-        language_client = language_v1.LanguageServiceClient(credentials=creds)
-        document = language_v1.Document(content=texto, type_=language_v1.Document.Type.PLAIN_TEXT, language='pt')
-        sentiment = language_client.analyze_sentiment(request={'document': document}).document_sentiment
-        return sentiment.score
-    except KeyError:
-        st.sidebar.error("Credenciais 'gcp_creds' não encontradas nos Secrets. Análise de Sentimento desativada.")
-        return 0
-    except Exception: return 0
-
-@st.cache_data(ttl=3600)
-def gerar_mensagem_ia(reviews, nome_estabelecimento, resumo_google):
+def gerar_mensagem_ia(reviews, nome_estabelecimento):
     if not GEMINI_API_KEY or not reviews:
         return MENSAGEM_PROSPECCAO_PADRAO
+    
     texto_reviews = "\n".join([f"- {r['text']}" for r in reviews if r.get('text')])
-    contexto = ""
-    if resumo_google and resumo_google != 'N/A':
-        contexto += f"Resumo do Estabelecimento:\n{resumo_google}\n\n"
-    if texto_reviews:
-        contexto += f"Opinião dos Clientes (Avaliações):\n{texto_reviews}"
-    if not contexto:
-        return MENSAGEM_PROSPECCAO_PADRAO
+    if not texto_reviews: return MENSAGEM_PROSPECCAO_PADRAO
+
     prompt = f"""
-    Assuma a persona de um vendedor B2B sênior e muito experiente da Café Orfeu, uma marca de cafés especiais de luxo. Sua comunicação é elegante, confiante e focada em criar um relacionamento, não apenas em vender.
+    Assuma a persona de um vendedor B2B sênior e muito experiente da Café Orfeu, uma marca de cafés especiais de luxo. Sua comunicação é elegante, confiante e focada em criar um relacionamento.
     Seu objetivo é redigir uma mensagem de WhatsApp para o primeiro contato com o gestor do estabelecimento '{nome_estabelecimento}'.
-    Use as informações abaixo para encontrar um gancho autêntico. A mensagem deve mostrar que você fez sua pesquisa.
+    Analise as avaliações de clientes abaixo para encontrar um gancho autêntico.
     ---
-    {contexto}
+    {texto_reviews}
     ---
-    Crie a mensagem (máximo 3 frases) que elogie um aspecto único do negócio, conecte sutilmente à qualidade do nosso café, e finalize com uma pergunta leve e aberta. Comece de forma direta, sem "Olá".
+    Com base nisso, crie a mensagem (máximo 3 frases) que elogie um aspecto único do negócio, conecte sutilmente à qualidade do nosso café, e finalize com uma pergunta leve e aberta. Comece de forma direta, sem "Olá".
     """
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -195,13 +172,16 @@ def gerar_mensagem_ia(reviews, nome_estabelecimento, resumo_google):
 @st.cache_data(ttl=3600)
 def buscar_detalhes_do_lugar(_gmaps_client, place_id):
     try:
-        fields = ['name', 'formatted_phone_number', 'website', 'reviews', 'editorial_summary']
+        # A busca agora pede 'reviews' para a IA, mas não 'editorial_summary' ou 'opening_hours'
+        fields = ['name', 'formatted_phone_number', 'website', 'reviews']
         details = _gmaps_client.place(place_id=place_id, fields=fields, language='pt-BR')
         return details.get('result', {})
     except Exception as e:
         st.error(f"Erro ao buscar detalhes para place_id {place_id}: {e}"); return {}
 
 def prospectar_bairros(api_key, bairros, cidade, tipos, nota_range, precos, raio, min_avaliacoes, keyword):
+    if not api_key or "COLE_SUA_CHAVE" in api_key:
+        st.error("ERRO: A chave da API do Google Maps não foi definida no código."); return pd.DataFrame()
     gmaps = googlemaps.Client(key=api_key)
     resultados_finais = []
     barra_progresso = st.progress(0, text="Iniciando prospecção...")
@@ -209,11 +189,8 @@ def prospectar_bairros(api_key, bairros, cidade, tipos, nota_range, precos, raio
         if not bairro_busca.strip(): continue
         barra_progresso.progress((i + 1) / len(bairros), text=f"Processando bairro: {bairro_busca}...")
         try:
-            # CORREÇÃO: Tornando a busca de geocoding mais específica
-            geocode_result = gmaps.geocode(f"{bairro_busca}, {cidade}")
-            if not geocode_result:
-                st.warning(f"Não foi possível encontrar as coordenadas para '{bairro_busca}'. Pulando.")
-                continue
+            geocode_result = gmaps.geocode(f"{bairro_busca}, {cidade}");
+            if not geocode_result: st.warning(f"Bairro '{bairro_busca}' não encontrado."); continue
             loc = geocode_result[0]['geometry']['location']
         except Exception as e:
             st.error(f"Erro de geocodificação para '{bairro_busca}, {cidade}': {e}"); continue
@@ -231,24 +208,16 @@ def prospectar_bairros(api_key, bairros, cidade, tipos, nota_range, precos, raio
                         pontuacao = calcular_pontuacao(place, bairro_busca, precos)
                         email, instagram = raspar_contatos_do_site(detalhes.get('website'))
                         lat, lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
-                        sentimento_medio = 0
-                        reviews = detalhes.get('reviews')
-                        if reviews:
-                            scores = [analisar_sentimento_do_texto(r['text']) for r in reviews if r.get('text')]
-                            if scores: sentimento_medio = sum(scores) / len(scores)
-                        resumo_google = detalhes.get('editorial_summary', {}).get('overview', 'N/A')
                         
                         resultados_finais.append({
                             'Pontuação': pontuacao, 'Nome': place.get('name'), 
                             'Nota Média': place.get('rating', 0), 'Nº de Avaliações': num_avaliacoes,
-                            'Índice de Sentimento': sentimento_medio,
                             'Faixa de Preço': '$' * place.get('price_level', 0) if place.get('price_level') else 'N/A',
                             'Email': email, 'Instagram': instagram,
                             'Website': detalhes.get('website', 'N/A'), 'URL Google Maps': place.get('url', 'N/A'),
                             'Telefone': detalhes.get('formatted_phone_number', 'N/A'),
                             'Endereço': place.get('vicinity'), 'Tipo': tipo.replace('_', ' ').capitalize(),
-                            'Latitude': lat, 'Longitude': lng, 'Reviews_API': detalhes.get('reviews', []),
-                            'Resumo_Google': resumo_google
+                            'Latitude': lat, 'Longitude': lng, 'Reviews_API': detalhes.get('reviews', [])
                         })
             except Exception as e: st.error(f"Erro ao buscar '{tipo}' em '{bairro_busca}': {e}")
     barra_progresso.empty()
@@ -294,24 +263,61 @@ if st.sidebar.button("🔍 Prospectar Agora"):
 if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
     df_para_exibir = st.session_state['df_final'].copy()
     
-    with st.spinner("Analisando sentimento e gerando mensagens com IA... (pode levar um tempo)"):
-        df_para_exibir['Mensagem_IA'] = df_para_exibir.apply(lambda row: gerar_mensagem_ia(row['Reviews_API'], row['Nome'], row['Resumo_Google']), axis=1)
+    with st.spinner("Gerando mensagens personalizadas com IA... (pode levar um tempo)"):
+        df_para_exibir['Mensagem_IA'] = df_para_exibir.apply(lambda row: gerar_mensagem_ia(row['Reviews_API'], row['Nome']), axis=1)
     
     df_para_exibir['Ação WhatsApp'] = df_para_exibir.apply(lambda row: gerar_link_whatsapp(row['Telefone'], row['Mensagem_IA']), axis=1)
     df_para_exibir['Ação Email'] = df_para_exibir['Email'].apply(lambda email: gerar_link_email(email, "Contato Comercial - Café Orfeu", MENSAGEM_PROSPECCAO_PADRAO))
 
     st.sidebar.divider()
     st.sidebar.header("Otimizador de Rota")
-    # ... (código do otimizador de rota) ...
+    pontuacao_minima_rota = st.sidebar.slider("Pontuação mínima para rota", 0, 150, 50, key="pontuacao_rota")
+    num_visitas = st.sidebar.slider("Número de locais a visitar", 2, 10, 5, key="num_visitas_rota")
+    mapa_modos = {"Dirigindo 🚗": "driving", "Andando 🚶": "walking"}
+    modo_selecionado_pt = st.sidebar.radio("Modo de transporte", list(mapa_modos.keys()))
     
-    st.header("Visualização Geográfica dos Leads")
-    mapa_leads = criar_mapa_interativo(df_para_exibir)
-    if mapa_leads:
-        components.html(mapa_leads._repr_html_(), height=450)
+    if st.sidebar.button("📍 Otimizar Rota de Visita"):
+        modo_transporte_en = mapa_modos[modo_selecionado_pt]
+        df_filtrado = df_para_exibir[df_para_exibir['Pontuação'] >= pontuacao_minima_rota]
+        df_top = df_filtrado.head(num_visitas)
+        if len(df_top) >= 2:
+            with st.spinner("Calculando a rota mais eficiente..."):
+                gmaps_client = googlemaps.Client(key=MINHA_API_KEY)
+                rota_info = gerar_rota_otimizada(gmaps_client, df_top, modo_transporte_en)
+                st.session_state['rota_info'] = rota_info
+        else:
+            st.sidebar.warning("Não há locais suficientes com os critérios de rota.")
+
+    if 'rota_info' in st.session_state and st.session_state['rota_info']:
+        rota_info = st.session_state['rota_info']
+        st.header("Rota de Visita Otimizada")
+        mapa_com_rota = criar_mapa_interativo(rota_info['dataframe'], rota_coords=rota_info['coords'])
+        if mapa_com_rota:
+            components.html(mapa_com_rota._repr_html_(), height=400)
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.subheader("Abrir no Celular")
+            qr = qrcode.QRCode(version=1, box_size=10, border=4)
+            qr.add_data(rota_info['url']); qr.make(fit=True)
+            img = qr.make_image(fill='black', back_color='white')
+            buf = BytesIO(); img.save(buf, format="PNG")
+            st.image(buf)
+            st.link_button("Abrir Rota no Navegador", rota_info['url'])
+        with col2:
+            st.subheader("Ordem de Visitação")
+            df_rota_display = rota_info['dataframe'][['Nome', 'Endereço', 'Pontuação']].reset_index(drop=True)
+            df_rota_display.index += 1
+            st.dataframe(df_rota_display, use_container_width=True)
+    else:
+        st.header("Visualização Geográfica dos Leads")
+        mapa_leads = criar_mapa_interativo(df_para_exibir)
+        if mapa_leads:
+            components.html(mapa_leads._repr_html_(), height=450)
 
     st.header("Lista Completa de Resultados")
+    
     colunas_para_exibir = [
-        'Pontuação', 'Nome', 'Tipo', 'Endereço', 'Índice de Sentimento',
+        'Pontuação', 'Nome', 'Tipo', 'Endereço', 
         'Nota Média', 'Nº de Avaliações', 'Telefone', 'Ação WhatsApp', 
         'Email', 'Ação Email', 'Website', 'Instagram', 'Faixa de Preço'
     ]
@@ -319,7 +325,6 @@ if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
         df_para_exibir[[col for col in colunas_para_exibir if col in df_para_exibir.columns]], 
         hide_index=True, height=600, use_container_width=True,
         column_config={
-            "Índice de Sentimento": st.column_config.ProgressColumn("Sentimento", format="%.2f", min_value=-1, max_value=1),
             "Ação WhatsApp": st.column_config.LinkColumn("WhatsApp", display_text="Contatar 💬"),
             "Ação Email": st.column_config.LinkColumn("Email", display_text="Contatar ✉️")
         }
