@@ -14,25 +14,6 @@ from urllib.parse import quote
 import qrcode
 from io import BytesIO
 import google.generativeai as genai
-import os # Import necessário para a sua solução
-
-# --- LÓGICA DE CREDENCIAIS (SUA SOLUÇÃO) ---
-# Tenta carregar as bibliotecas de IA e configurar as credenciais.
-# Se falhar, desativa as funcionalidades de IA de forma controlada.
-
-SENTIMENT_ENABLED = False
-creds_path = os.path.join(os.path.dirname(__file__), 'gcp_credentials.json')
-
-if os.path.exists(creds_path):
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
-    try:
-        from google.cloud import language_v1
-        language_client = language_v1.LanguageServiceClient()
-        SENTIMENT_ENABLED = True
-    except Exception as e:
-        st.sidebar.warning(f"Erro ao iniciar a Análise de Sentimento: {e}")
-else:
-    st.sidebar.warning("Arquivo 'gcp_credentials.json' não encontrado. Análise de Sentimento desativada.")
 
 # --- CSS PERSONALIZADO ---
 page_style = """
@@ -165,22 +146,13 @@ def gerar_rota_otimizada(_gmaps_client, df_rota, modo):
         st.error(f"Erro ao calcular a rota: {e}"); return None
 
 @st.cache_data(ttl=3600)
-def analisar_sentimento_do_texto(texto):
-    if not SENTIMENT_ENABLED or not texto:
-        return 0.0
-    try:
-        document = language_v1.Document(content=texto, type_=language_v1.Document.Type.PLAIN_TEXT)
-        result = language_client.analyze_sentiment(request={'document': document})
-        return result.document_sentiment.score
-    except Exception:
-        return 0.0
-
-@st.cache_data(ttl=3600)
 def gerar_mensagem_ia(reviews, nome_estabelecimento):
     if not GEMINI_API_KEY or not reviews:
         return MENSAGEM_PROSPECCAO_PADRAO
+    
     texto_reviews = "\n".join([f"- {r['text']}" for r in reviews if r.get('text')])
     if not texto_reviews: return MENSAGEM_PROSPECCAO_PADRAO
+
     prompt = f"""
     Assuma a persona de um vendedor B2B sênior e muito experiente da Café Orfeu, uma marca de cafés especiais de luxo. Sua comunicação é elegante, confiante e focada em criar um relacionamento.
     Seu objetivo é redigir uma mensagem de WhatsApp para o primeiro contato com o gestor do estabelecimento '{nome_estabelecimento}'.
@@ -200,6 +172,7 @@ def gerar_mensagem_ia(reviews, nome_estabelecimento):
 @st.cache_data(ttl=3600)
 def buscar_detalhes_do_lugar(_gmaps_client, place_id):
     try:
+        # Busca agora pede 'reviews' para a IA, e foi simplificada
         fields = ['name', 'formatted_phone_number', 'website', 'reviews']
         details = _gmaps_client.place(place_id=place_id, fields=fields, language='pt-BR')
         return details.get('result', {})
@@ -235,18 +208,16 @@ def prospectar_bairros(api_key, bairros, cidade, tipos, nota_range, precos, raio
                         pontuacao = calcular_pontuacao(place, bairro_busca, precos)
                         email, instagram = raspar_contatos_do_site(detalhes.get('website'))
                         lat, lng = place['geometry']['location']['lat'], place['geometry']['location']['lng']
-                        reviews = detalhes.get('reviews', [])
                         
                         resultados_finais.append({
                             'Pontuação': pontuacao, 'Nome': place.get('name'), 
                             'Nota Média': place.get('rating', 0), 'Nº de Avaliações': num_avaliacoes,
-                            'Reviews_API': reviews, # Guardamos as reviews para as outras funções
                             'Faixa de Preço': '$' * place.get('price_level', 0) if place.get('price_level') else 'N/A',
                             'Email': email, 'Instagram': instagram,
                             'Website': detalhes.get('website', 'N/A'), 'URL Google Maps': place.get('url', 'N/A'),
                             'Telefone': detalhes.get('formatted_phone_number', 'N/A'),
                             'Endereço': place.get('vicinity'), 'Tipo': tipo.replace('_', ' ').capitalize(),
-                            'Latitude': lat, 'Longitude': lng
+                            'Latitude': lat, 'Longitude': lng, 'Reviews_API': detalhes.get('reviews', [])
                         })
             except Exception as e: st.error(f"Erro ao buscar '{tipo}' em '{bairro_busca}': {e}")
     barra_progresso.empty()
@@ -292,10 +263,7 @@ if st.sidebar.button("🔍 Prospectar Agora"):
 if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
     df_para_exibir = st.session_state['df_final'].copy()
     
-    with st.spinner("Analisando e gerando mensagens com IA..."):
-        if SENTIMENT_ENABLED:
-            df_para_exibir['Índice de Sentimento'] = df_para_exibir['Reviews_API'].apply(lambda reviews: analisar_sentimento_do_texto("\n".join(r['text'] for r in reviews)))
-        
+    with st.spinner("Gerando mensagens personalizadas com IA... (pode levar um tempo)"):
         df_para_exibir['Mensagem_IA'] = df_para_exibir.apply(lambda row: gerar_mensagem_ia(row['Reviews_API'], row['Nome']), axis=1)
     
     df_para_exibir['Ação WhatsApp'] = df_para_exibir.apply(lambda row: gerar_link_whatsapp(row['Telefone'], row['Mensagem_IA']), axis=1)
@@ -303,29 +271,60 @@ if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
 
     st.sidebar.divider()
     st.sidebar.header("Otimizador de Rota")
-    # ... (código do otimizador de rota) ...
+    pontuacao_minima_rota = st.sidebar.slider("Pontuação mínima para rota", 0, 150, 50, key="pontuacao_rota")
+    num_visitas = st.sidebar.slider("Número de locais a visitar", 2, 10, 5, key="num_visitas_rota")
+    mapa_modos = {"Dirigindo 🚗": "driving", "Andando 🚶": "walking"}
+    modo_selecionado_pt = st.sidebar.radio("Modo de transporte", list(mapa_modos.keys()))
     
-    st.header("Visualização Geográfica dos Leads")
-    mapa_leads = criar_mapa_interativo(df_para_exibir)
-    if mapa_leads:
-        components.html(mapa_leads._repr_html_(), height=450)
+    if st.sidebar.button("📍 Otimizar Rota de Visita"):
+        modo_transporte_en = mapa_modos[modo_selecionado_pt]
+        df_filtrado = df_para_exibir[df_para_exibir['Pontuação'] >= pontuacao_minima_rota]
+        df_top = df_filtrado.head(num_visitas)
+        if len(df_top) >= 2:
+            with st.spinner("Calculando a rota mais eficiente..."):
+                gmaps_client = googlemaps.Client(key=MINHA_API_KEY)
+                rota_info = gerar_rota_otimizada(gmaps_client, df_top, modo_transporte_en)
+                st.session_state['rota_info'] = rota_info
+        else:
+            st.sidebar.warning("Não há locais suficientes com os critérios de rota.")
 
-    st.header("Resultados da Prospecção")
+    if 'rota_info' in st.session_state and st.session_state['rota_info']:
+        rota_info = st.session_state['rota_info']
+        st.header("Rota de Visita Otimizada")
+        mapa_com_rota = criar_mapa_interativo(rota_info['dataframe'], rota_coords=rota_info['coords'])
+        if mapa_com_rota:
+            components.html(mapa_com_rota._repr_html_(), height=400)
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.subheader("Abrir no Celular")
+            qr = qrcode.QRCode(version=1, box_size=10, border=4)
+            qr.add_data(rota_info['url']); qr.make(fit=True)
+            img = qr.make_image(fill='black', back_color='white')
+            buf = BytesIO(); img.save(buf, format="PNG")
+            st.image(buf)
+            st.link_button("Abrir Rota no Navegador", rota_info['url'])
+        with col2:
+            st.subheader("Ordem de Visitação")
+            df_rota_display = rota_info['dataframe'][['Nome', 'Endereço', 'Pontuação']].reset_index(drop=True)
+            df_rota_display.index += 1
+            st.dataframe(df_rota_display, use_container_width=True)
+    else:
+        st.header("Visualização Geográfica dos Leads")
+        mapa_leads = criar_mapa_interativo(df_para_exibir)
+        if mapa_leads:
+            components.html(mapa_leads._repr_html_(), height=450)
+
+    st.header("Lista Completa de Resultados")
     
     colunas_para_exibir = [
-        'Pontuação', 'Nome', 'Tipo', 'Endereço', 
-        'Nota Média', 'Nº de Avaliações', 'Telefone', 'Ação WhatsApp', 
-        'Email', 'Ação Email', 'Website', 'Instagram', 'Faixa de Preço'
+        'Pontuação', 'Nome', 'Tipo', 'Endereço', 'Nota Média', 'Nº de Avaliações', 
+        'Telefone', 'Ação WhatsApp', 'Email', 'Ação Email', 
+        'Website', 'Instagram', 'Faixa de Preço'
     ]
-    # Adiciona a coluna de sentimento apenas se ela foi habilitada e calculada
-    if SENTIMENT_ENABLED and 'Índice de Sentimento' in df_para_exibir.columns:
-        colunas_para_exibir.insert(4, 'Índice de Sentimento')
-
     st.dataframe(
         df_para_exibir[[col for col in colunas_para_exibir if col in df_para_exibir.columns]], 
         hide_index=True, height=600, use_container_width=True,
         column_config={
-            "Índice de Sentimento": st.column_config.ProgressColumn("Sentimento", format="%.2f", min_value=-1, max_value=1),
             "Ação WhatsApp": st.column_config.LinkColumn("WhatsApp", display_text="Contatar 💬"),
             "Ação Email": st.column_config.LinkColumn("Email", display_text="Contatar ✉️")
         }
@@ -336,6 +335,5 @@ if 'df_final' in st.session_state and not st.session_state['df_final'].empty:
         return df.to_csv(index=False, sep=';').encode('utf-8-sig')
     csv = convert_df_to_csv(df_para_exibir)
     st.download_button(label="📥 Baixar resultados como CSV", data=csv, file_name=f"prospeccao_orfeu.csv", mime="text/csv")
-
 elif 'df_final' in st.session_state:
     st.warning("Nenhum resultado encontrado com os critérios especificados.")
