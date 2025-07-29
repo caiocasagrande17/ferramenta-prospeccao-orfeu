@@ -172,7 +172,7 @@ def gerar_mensagem_ia(reviews, nome_estabelecimento):
 @st.cache_data(ttl=3600)
 def buscar_detalhes_do_lugar(_gmaps_client, place_id):
     try:
-        # A busca agora pede 'reviews' para a IA, mas não 'editorial_summary' ou 'opening_hours'
+        # Busca agora pede 'reviews' para a IA, e foi simplificada
         fields = ['name', 'formatted_phone_number', 'website', 'reviews']
         details = _gmaps_client.place(place_id=place_id, fields=fields, language='pt-BR')
         return details.get('result', {})
